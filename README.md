@@ -1,4 +1,4 @@
-# Globcal CP cs CC-CP cs SCC-CP (Simulation)
+# Global CP cs CC-CP cs SCC-CP (Simulation)
 
 This repository runs R simulations comparing three conformal prediction methos for multi-class classification:
 - **Globcal CP (GCP)** : one global threshold.
@@ -19,10 +19,9 @@ This repository runs R simulations comparing three conformal prediction methos f
 ```r
 source("scripts/01_run_grid.R")
 source("scripts/02_plot_all.R")
-
+```
 
 # References
-
 Ding, T., Angelopoulos, A. N., Bates, S., Jordan, M. I., and Tibshirani, R. J. (2023).
 *Class-Conditional Conformal Prediction with Many Classes*.
 Advances in Neural Information Processing Systems (NeurIPS 2023).
