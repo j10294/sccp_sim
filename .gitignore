@@ -1,0 +1,22 @@
+# outputs
+out/
+vision/out/
+
+# datasets / extracted files
+vision/data/
+
+# binary artifacts
+*.npz
+*.rds
+*.tar.gz
+*.pt
+*.pth
+*.ckpt
+
+# temp files
+*~
+.DS_Store
+__pycache__/
+*.pyc
+venv/
+.venv/
