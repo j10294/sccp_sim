@@ -404,3 +404,4 @@ fit_SCCCP <- function(p_sel, y_sel, s_sel_true,
     qG_sel = qG_sel
   )
 }
+

@@ -1,3 +1,10 @@
+source("R/methods.R")
+source("R/sim.R")
+
+library(reticulate)
+# ----------------------------
+# Load data from npz
+## ----------------------------
 load_cifar_npz <- function(npz_path){
   suppressPackageStartupMessages(library(reticulate))
   np <- reticulate::import("numpy", delay_load = TRUE)
