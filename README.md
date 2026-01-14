@@ -14,8 +14,23 @@
 
 ---
 
-## 1. Environment Setup
+## 1. Dependencies
+
+The following Python packages are required to run the experiments:
+
 - Python ≥ 3.9
+- numpy
+- scipy
+- scikit-learn
+- pandas
+- matplotlib
+- torch
+- torchvision
+- tqdm
+- pillow
+- tensorflow
+- tensorflow-datasets
+
 
 ## 2. iNat2017 데이터를 NPZ로 변환
 원본 파일은 용량 문제로 직접 사용하지 않으며, 실험에 필요한 train/val/test split을 포함한 NPZ 파일로 변환하여 사용한다.
