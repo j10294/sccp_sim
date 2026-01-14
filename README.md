@@ -14,7 +14,7 @@
 
 ---
 
-## 1. Dependencies
+## 0. Dependencies
 
 The following Python packages are required to run the experiments:
 
@@ -30,6 +30,15 @@ The following Python packages are required to run the experiments:
 - pillow
 - tensorflow
 - tensorflow-datasets
+
+## 1. Dataset
+Experiments are conducted on the iNaturalist 2017 (iNat2017) dataset,
+a large-scale and highly imbalanced real-world image classification benchmark
+[Van Horn et al., 2018].
+
+iNat2017은 실제 자연 환경에서 수집된 대규모 이미지 분류 데이터셋으로, 클래스 간 샘플 수의 불균형이 매우 심한것이 특징이다. 일부 소수 클래스는 극히 적은 관측치를 가지지만, 다수의 클래스는 수천장 이상의 이미지를 포함하고 있어 long-tailed 분포를 잘 반영한다. 
+
+이러한 특성으로 인해 GCP가 소수 클래스에 대해 과도하게 보수적이거나, 반대로 신뢰성을 보장하지 못하는 경우를 드러내기에 적합한 데이터라 생각된다. 본 실험에서는 iNat2017을 활용하여 클래스 불균형이 심한 상황에서도 우리가 제안하는 SCCP 방법이 기존 방법들에 비해 안정적이고 균형잡힌 prediction set을 제공할 수 있음을 검증하고자 한다. 
 
 
 ## 2. iNat2017 데이터를 NPZ로 변환
@@ -170,3 +179,7 @@ Springer.
 *Uncertainty Sets for Image Classifiers using Conformal Prediction*.
 Advances in Neural Information Processing Systems (NeurIPS 2022).
 
+- Van Horn, G., Mac Aodha, O., Song, Y., Cui, Y., Sun, C.,
+  Shepard, A., Adam, H., Perona, P., and Belongie, S. (2018).
+*The iNaturalist Species Classification and Detection Dataset*.
+Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR 2018).
