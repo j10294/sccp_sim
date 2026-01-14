@@ -1,0 +1,29 @@
+keys: ['p_sel', 'y_sel', 'p_cal', 'y_cal', 'p_tst', 'y_tst', 'idx_tr', 'idx_sel', 'idx_cal']
+p_sel                (10000, 100) float32 min=3.817e-18 max=1
+y_sel                (10000,) int64 min=0 max=99
+p_cal                (10000, 100) float32 min=2.551e-17 max=1
+y_cal                (10000,) int64 min=0 max=99
+p_tst                (10000, 100) float32 min=8.744e-18 max=1
+y_tst                (10000,) int64 min=0 max=99
+idx_tr               (30000,) int64 min=0 max=5e+04
+idx_sel              (10000,) int64 min=8 max=5e+04
+idx_cal              (10000,) int64 min=2 max=4.999e+04
+[rowsum] p_sel: mean=1.000000, min=1.000000, max=1.000000
+[rowsum] p_cal: mean=1.000000, min=1.000000, max=1.000000
+[rowsum] p_tst: mean=1.000000, min=1.000000, max=1.000000
+[check] path: ./out/cifar100_probs/cifar100_probs_seed1_e50_tr30000_sel10000_cal10000.npz
+[check] exists: True
+keys: ['p_sel', 'y_sel', 'p_cal', 'y_cal', 'p_tst', 'y_tst', 'idx_tr', 'idx_sel', 'idx_cal']
+p_sel                     shape=(10000, 100) dtype=float32 min=3.81729997417962e-18 max=1.0
+y_sel                     shape=(10000,) dtype=int64 min=0.0 max=99.0
+p_cal                     shape=(10000, 100) dtype=float32 min=2.55071481638383e-17 max=1.0
+y_cal                     shape=(10000,) dtype=int64 min=0.0 max=99.0
+p_tst                     shape=(10000, 100) dtype=float32 min=8.743733344507093e-18 max=1.0
+y_tst                     shape=(10000,) dtype=int64 min=0.0 max=99.0
+idx_tr                    shape=(30000,) dtype=int64 min=0.0 max=49999.0
+idx_sel                   shape=(10000,) dtype=int64 min=8.0 max=49998.0
+idx_cal                   shape=(10000,) dtype=int64 min=2.0 max=49994.0
+[rowsum] p_sel: mean=1.000000, min=1.000000, max=1.000000
+[rowsum] p_cal: mean=1.000000, min=1.000000, max=1.000000
+[rowsum] p_tst: mean=1.000000, min=1.000000, max=1.000000
+Use quit() or Ctrl-D (i.e. EOF) to exit
