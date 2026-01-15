@@ -137,12 +137,22 @@ python run_cp_from_npz.py \
   --npz data/npz/inat2017_probs_selA_calB_test_mnv3s_fz_t50k_ep5_seed1.npz \
   --alpha 0.1 \
   --K 5089 \
-  --method sccp \
-  --Kc 10 \
-  --tail_frac 0.2
+  --clusters 10 \
+  --tau 100 \
+  --embed score_quantile \
+  --q_grid 0.5,0.6,0.7,0.8,0.9 \
+  --seed 1
 ```
-- `Kc` : number of clusters
-- `tail_frac` : tail class의 비율
+-  `npz` : 확률 예측값과 sel/cal/test split이 저장된 파일 경로
+- `K` : 전체 클래스 수. (inat2017의 경우 `5089`)
+-  `clusters ` : 클러스터 개수 
+- `alpha` : 목표 miscoverage 수준
+-  `tau` : shrinkage parameter
+- `embed` : class embedding method
+  - `score_quantile` : 클래스별 score 분포의 quantile 기반 임베딩 (default)
+  - `prob_mean` : 평균 확률 벡터 기반 임베딩 
+- `q_grid` : `score_quantile` 에서 사용하는 quantile grid
+
 
 ---
 
