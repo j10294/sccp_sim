@@ -1,7 +1,7 @@
 import argparse
 import numpy as np
 from dataclasses import dataclass
-from typing import Dict, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 # ----------------------------
 # Utilities: load & auto-detect arrays
@@ -293,6 +293,43 @@ def eval_sets(
 # ----------------------------
 # SCCP: clustering classes + shrinkage of class-quantiles
 # ----------------------------
+
+import numpy as np
+
+def class_quantile_embedding(
+    scores_sel: np.ndarray,   # shape (n_sel,)
+    y_sel: np.ndarray,        # shape (n_sel,)
+    K: int,
+    q_grid: np.ndarray,       # e.g., [0.5,0.6,0.7,0.8,0.9,1-alpha]
+    fallback: str = "global", # or "nan_to_global"
+) -> np.ndarray:
+    """
+    For each class k, embed it by quantiles of its score distribution on selection set:
+        emb_k[j] = Quantile_{q_grid[j]}( scores_sel | y_sel=k ).
+    If class has no selection samples, fallback to global quantiles.
+    """
+    q_grid = np.asarray(q_grid, dtype=np.float64)
+    d = len(q_grid)
+
+    emb = np.zeros((K, d), dtype=np.float64)
+
+    # global fallback quantiles
+    global_q = np.quantile(scores_sel, q_grid, method="higher")
+
+    for k in range(K):
+        m = (y_sel == k)
+        if m.any():
+            emb[k] = np.quantile(scores_sel[m], q_grid, method="higher")
+        else:
+            emb[k] = global_q
+
+    # replace non-finite just in case
+    bad = ~np.isfinite(emb)
+    if bad.any():
+        emb[bad] = np.take(global_q, np.where(bad)[1])
+
+    return emb
+
 def kmeans_simple(X: np.ndarray, n_clusters: int, seed: int = 1, n_iter: int = 50) -> np.ndarray:
     # Minimal k-means (no sklearn dependency)
     rng = np.random.default_rng(seed)
@@ -316,6 +353,12 @@ def kmeans_simple(X: np.ndarray, n_clusters: int, seed: int = 1, n_iter: int = 5
                 centers[c] = X[rng.integers(0, N)]
     return labels
 
+from typing import Tuple, Optional, List
+import numpy as np
+
+# -------------------------
+# SCCP thresholds (global + cluster shrinkage)
+# -------------------------
 def sccp_thresholds(
     P_sel: np.ndarray,
     y_sel: np.ndarray,
@@ -325,82 +368,142 @@ def sccp_thresholds(
     n_clusters: int = 10,
     shrink_tau: float = 50.0,
     seed: int = 1,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    embed_mode: str = "score_quantile",
+    q_grid: Optional[List[float]] = None,
+) -> Tuple[np.ndarray, np.ndarray, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Return:
-      - t_class: per-class thresholds (CCCP-like)
+      - t_class: per-class thresholds (CCCP-like; reporting)
       - t_cluster: per-cluster thresholds
-      - t_sccp: per-class SCCP thresholds (shrink toward cluster)
-    shrink_tau controls shrinkage strength (bigger -> more shrink to cluster)
+      - global_t: global threshold
+      - t_mix_cluster: per-cluster mixed thresholds (cluster+global shrinkage)
+      - t_sccp: per-class SCCP thresholds (inherit cluster mixed threshold)
+      - c_labels: class->cluster mapping
     """
     K = P_cal.shape[1]
 
-    # Represent each class by mean prob vector on selection set
-    class_means = np.zeros((K, K), dtype=np.float64)
-    for k in range(K):
-        m = (y_sel == k)
-        if m.any():
-            class_means[k] = P_sel[m].mean(axis=0)
-        else:
-            class_means[k] = 0.0
+    scores_sel = score_s1(P_sel, y_sel)
+    scores_cal = score_s1(P_cal, y_cal)
+    global_t = quantile_upper(scores_cal, alpha)
 
-    # Cluster classes
-    c_labels = kmeans_simple(class_means, n_clusters=n_clusters, seed=seed)
+    # --- embedding for clustering ---
+    if embed_mode == "prob_mean":
+        class_means = np.zeros((K, K), dtype=np.float64)
+        for k in range(K):
+            m = (y_sel == k)
+            class_means[k] = P_sel[m].mean(axis=0) if m.any() else 0.0
+        emb = class_means
 
-    # Class thresholds
-    t_class = np.zeros(K, dtype=np.float64)
-    n_class = np.zeros(K, dtype=int)
-    scores = score_s1(P_cal, y_cal)
+    elif embed_mode == "score_quantile":
+        if q_grid is None:
+            q_grid = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0 - alpha]
+        emb = class_quantile_embedding(scores_sel, y_sel, K, np.array(q_grid, dtype=float))
+
+    else:
+        raise ValueError(f"Unknown embed_mode={embed_mode}")
+
+    # cluster classes
+    c_labels = kmeans_simple(emb, n_clusters=n_clusters, seed=seed)
+
+    # class thresholds (optional CCCP-like)
+    t_class = np.full(K, np.nan, dtype=np.float64)
     for k in range(K):
         m = (y_cal == k)
-        n_class[k] = int(m.sum())
         if m.any():
-            t_class[k] = quantile_upper(scores[m], alpha)
-        else:
-            t_class[k] = np.nan
+            t_class[k] = quantile_upper(scores_cal[m], alpha)
 
-    # Cluster thresholds: pool scores across classes in cluster
-    t_cluster = np.zeros(n_clusters, dtype=np.float64)
-    n_cluster = np.zeros(n_clusters, dtype=int)
+    # cluster thresholds
+    t_cluster = np.full(n_clusters, np.nan, dtype=np.float64)
+    n_cluster = np.zeros(n_clusters, dtype=np.int64)
     for c in range(n_clusters):
-        m = np.isin(y_cal, np.where(c_labels == c)[0])
+        cls_in_c = np.where(c_labels == c)[0]
+        m = np.isin(y_cal, cls_in_c)
         n_cluster[c] = int(m.sum())
         if m.any():
-            t_cluster[c] = quantile_upper(scores[m], alpha)
+            t_cluster[c] = quantile_upper(scores_cal[m], alpha)
         else:
-            t_cluster[c] = quantile_upper(scores, alpha)  # fallback
+            t_cluster[c] = global_t
 
-    # SCCP shrink: convex combine class and cluster thresholds
-    # w_k = n_k / (n_k + tau)  => small n_k -> more cluster; large n_k -> more class
+    # global + cluster shrinkage (per cluster)
+    t_mix_cluster = np.zeros(n_clusters, dtype=np.float64)
+    for c in range(n_clusters):
+        tc = t_cluster[c] if np.isfinite(t_cluster[c]) else global_t
+        nc = n_cluster[c]
+        wc = nc / (nc + shrink_tau) if (nc + shrink_tau) > 0 else 0.0
+        t_mix_cluster[c] = wc * tc + (1.0 - wc) * global_t
+
+    # per-class SCCP threshold
     t_sccp = np.zeros(K, dtype=np.float64)
-    global_t = quantile_upper(scores, alpha)
     for k in range(K):
-        c = c_labels[k]
-        tk = t_class[k]
-        tc = t_cluster[c]
-        if not np.isfinite(tk):
-            tk = global_t
-        wk = n_class[k] / (n_class[k] + shrink_tau) if (n_class[k] + shrink_tau) > 0 else 0.0
-        t_sccp[k] = wk * tk + (1.0 - wk) * tc
+        t_sccp[k] = t_mix_cluster[c_labels[k]]
 
-    return t_class, t_cluster, t_sccp, c_labels
+    return t_class, t_cluster, global_t, t_mix_cluster, t_sccp, c_labels
+
+# -------------------------
+# SCCP-only evaluator for sweep
+# -------------------------
+def eval_one_method_sccp(
+    P_test: np.ndarray,
+    y_test: np.ndarray,
+    t_sccp: np.ndarray,
+    class2cluster: np.ndarray,
+    K: int,
+) -> Dict[str, float]:
+    S = P_test >= (1.0 - t_sccp[None, :])
+    e = eval_sets(S, y_test, K=K, class2cluster=class2cluster)
+    return {
+        "cov": float(e.get("coverage", np.nan)),
+        "size": float(e.get("avg_size", np.nan)),
+        "avg_clu": float(e.get("avg_cluster_cov", np.nan)),
+        "worst_clu": float(e.get("worst_cluster_cov", np.nan)),
+        "std_clu": float(e.get("std_cluster_cov", np.nan)),
+    }
+
+
 
 # ----------------------------
 # Main runner
 # ----------------------------
+
+# -------------------------
+# Helpers
+# -------------------------
+def parse_float_list(s: str) -> List[float]:
+    return [float(x) for x in s.split(",") if x.strip() != ""]
+
+
+def parse_int_list(s: str) -> List[int]:
+    return [int(x) for x in s.split(",") if x.strip() != ""]
+
+
+def _parse_int_list(s: str) -> List[int]:
+    return parse_int_list(s)
+
+
 @dataclass
 class Results:
     method: str
-    coverage: float
-    avg_size: float
-    worst_class_cov: float
-    std_class_cov: float
-    worst_cluster_cov : float
-    std_cluster_cov : float
-    avg_class_cov : float = float('nan')
-    avg_cluster_cov : float = float('nan')
+    coverage: float = float("nan")
+    avg_size: float = float("nan")
+    avg_class_cov: float = float("nan")
+    worst_class_cov: float = float("nan")
+    std_class_cov: float = float("nan")
+    avg_cluster_cov: float = float("nan")
+    worst_cluster_cov: float = float("nan")
+    std_cluster_cov: float = float("nan")
 
 
+def pick_summary(e: Dict) -> Dict:
+    keys = [
+        "coverage", "avg_size",
+        "avg_class_cov", "worst_class_cov", "std_class_cov",
+        "avg_cluster_cov", "worst_cluster_cov", "std_cluster_cov",
+    ]
+    return {k: e.get(k, float("nan")) for k in keys}
+
+# -------------------------
+# Main
+# -------------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--npz", type=str, required=True)
@@ -410,7 +513,8 @@ def main():
     ap.add_argument("--tau", type=float, default=50.0)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", type=str, default="")
-                        # --- Top-M diagnostics ---
+
+    # --- Top-M diagnostics ---
     ap.add_argument("--report_topM", action="store_true",
                     help="Print true-label rank / top-M accuracy diagnostics.")
     ap.add_argument("--topM_list", type=str, default="1,5,10,20,50,100,200,500,1000",
@@ -418,49 +522,100 @@ def main():
     ap.add_argument("--topM_split", type=str, default="test",
                     choices=["sel", "cal", "test", "all"],
                     help="Which split(s) to report: sel/cal/test/all.")
+
+    # --- Sweep controls ---
+    ap.add_argument("--sweep", action="store_true",
+                    help="Run SCCP sweep over tau/clusters and exit.")
+    ap.add_argument("--tau_list", type=str, default="50",
+                    help="Comma-separated tau values for sweep, e.g., 1,5,10,50,200")
+    ap.add_argument("--clusters_list", type=str, default=None,
+                    help="Comma-separated Kc values for sweep, e.g., 5,10,20. If None, use --clusters")
+
+    # --- Embedding controls ---
+    ap.add_argument("--embed", type=str, default="score_quantile",
+                    choices=["prob_mean", "score_quantile"])
+    ap.add_argument("--q_grid", type=str, default=None,
+                    help="Comma-separated quantiles for score_quantile embedding, e.g., 0.5,0.6,0.7,0.8,0.9")
+
     args = ap.parse_args()
+
     print("=== DEBUG: class/cluster metrics enabled ===")
-
-
     splits = load_npz_splits(args.npz, K=args.K, fallback_split_seed=args.seed)
 
     P_cal, y_cal = splits["cal"]
     P_test, y_test = splits["test"]
 
-    # Selection set for SCCP: if missing, reuse cal (not ideal but works)
     if "sel" in splits:
         P_sel, y_sel = splits["sel"]
     else:
         P_sel, y_sel = P_cal, y_cal
-   
-    t_class2, t_cluster, t_sccp, class2cluster = sccp_thresholds(
-    P_sel=P_sel,
-    y_sel=y_sel,
-    P_cal=P_cal,
-    y_cal=y_cal,
-    alpha=args.alpha,
-    n_clusters=args.clusters,
-    shrink_tau=args.tau,
-    seed=args.seed,
-)
+
+    q_grid = parse_float_list(args.q_grid) if args.q_grid is not None else None
+
+    # ============================================================
+    # SCCP SWEEP MODE
+    # ============================================================
+    if args.sweep:
+        tau_vals = parse_float_list(args.tau_list)
+        kc_vals = parse_int_list(args.clusters_list) if args.clusters_list else [args.clusters]
+
+        print(f"[file] {args.npz}")
+        print(f"[alpha] {args.alpha}  [seed] {args.seed}  [embed] {args.embed}"
+              f"{'' if q_grid is None else f'  [q_grid]={q_grid}'}")
+        print("\nSweep results (SCCP only):")
+        print("Kc | tau  |   cov   |  size  | avg_clu | worst_clu | std_clu")
+        print("-------------------------------------------------------------")
+
+        for Kc in kc_vals:
+            for tau in tau_vals:
+                _, _, _, _, t_sccp, class2cluster = sccp_thresholds(
+                    P_sel=P_sel, y_sel=y_sel,
+                    P_cal=P_cal, y_cal=y_cal,
+                    alpha=args.alpha,
+                    n_clusters=Kc,
+                    shrink_tau=tau,
+                    seed=args.seed,
+                    embed_mode=args.embed,
+                    q_grid=q_grid,
+                )
+                res = eval_one_method_sccp(P_test, y_test, t_sccp, class2cluster, K=args.K)
+                print(f"{Kc:2d} | {tau:4.0f} | {res['cov']:.4f} | {res['size']:.1f} | "
+                      f"{res['avg_clu']:.4f} | {res['worst_clu']:.4f} | {res['std_clu']:.4f}")
+        return
+
+    # ============================================================
+    # SINGLE-RUN MODE (GCP/CCCP/SCCP table)
+    # ============================================================
+
+    # --- SCCP thresholds for the single run (IMPORTANT: do not reuse sweep leftovers) ---
+    t_class_s, t_cluster_s, global_t_s, t_mix_cluster_s, t_sccp_s, class2cluster_s = sccp_thresholds(
+        P_sel=P_sel, y_sel=y_sel,
+        P_cal=P_cal, y_cal=y_cal,
+        alpha=args.alpha,
+        n_clusters=args.clusters,
+        shrink_tau=args.tau,
+        seed=args.seed,
+        embed_mode=args.embed,
+        q_grid=q_grid,
+    )
+    class2cluster = class2cluster_s
+    t_sccp = t_sccp_s
+
     # --- GCP ---
     t_global = quantile_upper(score_s1(P_cal, y_cal), args.alpha)
     S_gcp = predset_from_threshold(P_test, t_global)
     eg = eval_sets(S_gcp, y_test, K=args.K, class2cluster=class2cluster)
 
-
-    # --- CCCP ---
+    # --- CCCP (use global fallback for missing classes) ---
     scores_cal = score_s1(P_cal, y_cal)
     K = args.K
     t_class = np.zeros(K, dtype=np.float64)
-    global_t = t_global
     for k in range(K):
         m = (y_cal == k)
         if m.any():
             t_class[k] = quantile_upper(scores_cal[m], args.alpha)
         else:
-            t_class[k] = global_t
-
+            t_class[k] = t_global
     S_cccp = P_test >= (1.0 - t_class[None, :])
     ec = eval_sets(S_cccp, y_test, K=args.K, class2cluster=class2cluster)
 
@@ -468,19 +623,12 @@ def main():
     S_sccp = P_test >= (1.0 - t_sccp[None, :])
     es = eval_sets(S_sccp, y_test, K=args.K, class2cluster=class2cluster)
 
-    def pick_summary(e: dict) -> dict:
-        keys = [
-            'coverage', 'avg_size',
-            'avg_class_cov',  'worst_class_cov','std_class_cov',
-            'avg_cluster_cov', 'worst_cluster_cov','std_cluster_cov']
-        return {k: e.get(k, float('nan')) for k in keys}
-
     rows = [
-        Results('GCP', **pick_summary(eg)),
-        Results('CCCP', **pick_summary(ec)), 
-        Results('SCCP', **pick_summary(es)),
+        Results("GCP", **pick_summary(eg)),
+        Results("CCCP", **pick_summary(ec)),
+        Results("SCCP", **pick_summary(es)),
     ]
-    # print summary
+
     print(f"[file] {args.npz}")
     print(f"[alpha] {args.alpha}  [clusters] {args.clusters}  [tau] {args.tau}  [seed] {args.seed}")
     print("")
@@ -489,10 +637,10 @@ def main():
           f"{'avg_clu':>7s} |  {'worst_clu':>9s} | {'std_clu':>7s}")
     print("-" * 102)
     for r in rows:
-        print(f'{r.method:6s} | {r.coverage:7.4f} | {r.avg_size:6.3f} | '
+        print(f"{r.method:6s} | {r.coverage:7.4f} | {r.avg_size:6.3f} | "
               f"{r.avg_class_cov:7.4f} | {r.worst_class_cov:9.4f} | {r.std_class_cov:7.4f} | "
-              f"{r.avg_cluster_cov:7.4f} | {r.worst_cluster_cov:9.4f} | {r.std_cluster_cov:7.4f}"
-        )
+              f"{r.avg_cluster_cov:7.4f} | {r.worst_cluster_cov:9.4f} | {r.std_cluster_cov:7.4f}")
+
     # --- Top-M diagnostics ---
     if args.report_topM:
         Ms = _parse_int_list(args.topM_list)
@@ -501,7 +649,8 @@ def main():
             s = summarize_topM(P, y, Ms=Ms)
             rq = s["rank_quantiles"]
             print(f"\n[Top-M diagnostics: {tag}] n={s['n']}")
-            print(f"  rank mean={s['rank_mean']:.2f} | q50={rq['q50']:.0f} q90={rq['q90']:.0f} q95={rq['q95']:.0f} q99={rq['q99']:.0f}")
+            print(f"  rank mean={s['rank_mean']:.2f} | q50={rq['q50']:.0f} q90={rq['q90']:.0f} "
+                  f"q95={rq['q95']:.0f} q99={rq['q99']:.0f}")
             print("  top-M accuracy:")
             for M in Ms:
                 print(f"    top-{M:<4d}: {s['topM_acc'][M]:.4f}")
@@ -513,7 +662,7 @@ def main():
         if args.topM_split in ("test", "all"):
             _print_topM("test", P_test, y_test)
 
-    # optional save
+    # --- Save JSON output ---
     if args.out:
         import json
         topM_report = {}
@@ -532,6 +681,8 @@ def main():
             "clusters": args.clusters,
             "tau": args.tau,
             "seed": args.seed,
+            "embed": args.embed,
+            "q_grid": q_grid,
             "results": [r.__dict__ for r in rows],
             "t_global": float(t_global),
             "t_class": t_class.tolist(),
@@ -540,12 +691,17 @@ def main():
             "GCP": eg,
             "CCCP": ec,
             "SCCP": es,
-            "class2cluster": class2cluster.tolist(),
-            "topM": topM_report
+            "topM": topM_report,
         }
         with open(args.out, "w") as f:
             json.dump(out, f, indent=2)
         print(f"\n[saved] {args.out}")
 
+
 if __name__ == "__main__":
     main()
+
+
+
+
+
