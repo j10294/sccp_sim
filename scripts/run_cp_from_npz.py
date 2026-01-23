@@ -613,7 +613,9 @@ def sccp_thresholds(
         for k in range(K):
             m = (y_sel == k)
             class_means[k] = P_sel[m].mean(axis=0) if m.any() else 0.0
-        emb = class_means
+        c_labels = kmeans_simple(class_means, n_clusters=n_clusters, seed=seed)
+        C_eff = n_clusters
+        is_null = None
 
     elif embed_mode == "score_quantile":
         if q_grid is None:
@@ -630,6 +632,8 @@ def sccp_thresholds(
             seed=seed,
         )
 
+        C = int(C_eff)
+
         # ===== DEBUG LOG (sanity check) =====
         n_min = min_count_for_null(alpha)
         counts_sel = np.bincount(y_sel, minlength=K)
@@ -645,8 +649,6 @@ def sccp_thresholds(
     else:
         raise ValueError(f"Unknown embed_mode={embed_mode}")
 
-    # cluster classes
-    c_labels = kmeans_simple(emb, n_clusters=n_clusters, seed=seed)
 
     # class thresholds (optional CCCP-like)
     t_class = np.full(K, np.nan, dtype=np.float64)
@@ -655,22 +657,16 @@ def sccp_thresholds(
         if m.any():
             t_class[k] = quantile_upper(scores_cal[m], alpha)
 
-    # cluster thresholds
-    if embed_mode == 'score_quantile':
-        C = C_eff
-    else:
-        C = n_clusters
+    
+    # ------------------------------------------------------------
+    # cluster thresholds (use effective cluster count!)
+    # ------------------------------------------------------------
+    C = int(C_eff) if ("C_eff" in locals() and C_eff is not None) else int(n_clusters)
+
     t_cluster = np.full(C, np.nan, dtype=np.float64)
     n_cluster = np.zeros(C, dtype=np.int64)
 
-    null_c = C - 1 if (embed_mode == 'score_quantile') else None
-    
     for c in range(C):
-        if (null_c is not None) and (c == null_c):
-            t_cluster[c] = global_t
-            n_cluster[c] = 0
-            continue
-        
         cls_in_c = np.where(c_labels == c)[0]
         m = np.isin(y_cal, cls_in_c)
         n_cluster[c] = int(m.sum())
@@ -679,19 +675,30 @@ def sccp_thresholds(
         else:
             t_cluster[c] = global_t
 
-
+    # ------------------------------------------------------------
     # global + cluster shrinkage (per cluster)
-    t_mix_cluster = np.zeros(n_clusters, dtype=np.float64)
+    # ------------------------------------------------------------
+    t_mix_cluster = np.zeros(C, dtype=np.float64)
     for c in range(C):
         tc = t_cluster[c] if np.isfinite(t_cluster[c]) else global_t
         nc = n_cluster[c]
         wc = nc / (nc + shrink_tau) if (nc + shrink_tau) > 0 else 0.0
         t_mix_cluster[c] = wc * tc + (1.0 - wc) * global_t
+    
+    null_id = C - 1
+    t_mix_cluster[null_id] = global_t # null cluster always uses global threshold
+    
 
+    # ------------------------------------------------------------
     # per-class SCCP threshold
+    # ------------------------------------------------------------
     t_sccp = np.zeros(K, dtype=np.float64)
     for k in range(K):
-        t_sccp[k] = t_mix_cluster[c_labels[k]]
+        ck = int(c_labels[k])
+        if ck < 0 or ck >= C:
+            raise ValueError(f"class {k}: cluster id {ck} out of range [0, {C-1}]")
+        t_sccp[k] = t_mix_cluster[ck]
+    # ------------------------------------------------------------
 
     return t_class, t_cluster, global_t, t_mix_cluster, t_sccp, c_labels
 
@@ -817,7 +824,7 @@ def main():
     # ============================================================
     if args.sweep:
         tau_vals = parse_float_list(args.tau_list)
-        kc_vals = parse_int_list(args.clusters_list) if args.clusters_list else [args.clusters]
+        kc_vals = _parse_int_list(args.clusters_list) if args.clusters_list else [args.clusters]
 
         print(f"[file] {args.npz}")
         print(f"[alpha] {args.alpha}  [seed] {args.seed}  [embed] {args.embed}"
