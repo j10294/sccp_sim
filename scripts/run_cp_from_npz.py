@@ -591,6 +591,8 @@ def sccp_thresholds(
     seed: int = 1,
     embed_mode: str = "score_quantile",
     q_grid: Optional[List[float]] = None,
+    cluster_mode : str = 'plain'
+      # 'plain' or 'cccp_null'
 ) -> Tuple[np.ndarray, np.ndarray, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Return:
@@ -609,18 +611,27 @@ def sccp_thresholds(
 
     # --- embedding for clustering ---
     if embed_mode == "prob_mean":
-        class_means = np.zeros((K, K), dtype=np.float64)
+        emb = np.zeros((K, K), dtype=np.float64)
         for k in range(K):
             m = (y_sel == k)
-            class_means[k] = P_sel[m].mean(axis=0) if m.any() else 0.0
-        c_labels = kmeans_simple(class_means, n_clusters=n_clusters, seed=seed)
-        C_eff = n_clusters
-        is_null = None
+            emb[k] = P_sel[m].mean(axis=0) if m.any() else 0.0
 
     elif embed_mode == "score_quantile":
         if q_grid is None:
             q_grid = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0 - alpha]
         q_grid_arr = np.array(q_grid, dtype=np.float64)
+
+        # quantile embedding (null 없이도 안정적으로 채우기 위해 global로 fallback)
+        emb = class_quantile_embedding(
+            scores_sel=scores_sel, y_sel=y_sel, K=K, q_grid=q_grid_arr, fallback="global"
+        )
+    else:
+        raise ValueError(f"Unknown embed_mode={embed_mode}")
+
+    # --- cluster classes: CCCP-style(null) OR plain k-means ---
+    if cluster_mode == "cccp_null":
+        if embed_mode != "score_quantile":
+            raise ValueError("cluster_mode='cccp_null' requires embed_mode='score_quantile'")
 
         c_labels, C_eff, is_null = cluster_classes_cccp_style(
             scores_sel=scores_sel,
@@ -632,22 +643,11 @@ def sccp_thresholds(
             seed=seed,
         )
 
-        C = int(C_eff)
-
-        # ===== DEBUG LOG (sanity check) =====
-        n_min = min_count_for_null(alpha)
-        counts_sel = np.bincount(y_sel, minlength=K)
-        print(f"[CCCP-cluster] alpha={alpha} n_min={n_min}")
-        print(f"[CCCP-cluster] null_classes={int(is_null.sum())}/{K}")
-        null_ids = np.where(is_null)[0]
-        print(f"[CCCP-cluster] null example ids: {null_ids[:20].tolist()}")
-        print(f"[CCCP-cluster] nonnull_classes={int((~is_null).sum())}/{K}")
-        print(f"[CCCP-cluster] C_eff={C_eff} (expect null_id={C_eff-1})")
-        print(f"[CCCP-cluster] class2cluster max={int(c_labels.max())} min={int(c_labels.min())}")
-        # ==============================
-
+    elif cluster_mode == "plain" :
+        c_labels = kmeans_simple(emb, n_clusters=n_clusters, seed=seed)
+        C = int(n_clusters)
     else:
-        raise ValueError(f"Unknown embed_mode={embed_mode}")
+        raise ValueError(f"Unknown cluster_mode={cluster_mode}")
 
 
     # class thresholds (optional CCCP-like)
@@ -687,7 +687,7 @@ def sccp_thresholds(
     
     null_id = C - 1
     t_mix_cluster[null_id] = global_t # null cluster always uses global threshold
-    
+
 
     # ------------------------------------------------------------
     # per-class SCCP threshold
@@ -697,7 +697,21 @@ def sccp_thresholds(
         ck = int(c_labels[k])
         if ck < 0 or ck >= C:
             raise ValueError(f"class {k}: cluster id {ck} out of range [0, {C-1}]")
-        t_sccp[k] = t_mix_cluster[ck]
+        t_cluster = np.full(C, np.nan, dtype=np.float64)
+        for c in range(C):
+            cls_in_c = np.where(c_labels == c)[0]
+            m = np.isin(y_cal, cls_in_c)
+            if m.any():
+                t_cluster[c] = quantile_upper(scores_cal[m], alpha)
+            else:
+                t_cluster[c] = global_t
+
+        counts_cal = np.bincount(y_cal, minlength=K)
+        t_sccp = np.zeros(K, dtype=np.float64)
+        for y  in range(K):
+            ny = int(counts_cal[y])
+            tau_y = shrink_tau / (shrink_tau + ny) if (shrink_tau + ny) > 0 else 1.0
+            t_sccp[y] = (1.0 - tau_y) * t_cluster[c_labels[y]] + tau_y * global_t
     # ------------------------------------------------------------
 
     return t_class, t_cluster, global_t, t_mix_cluster, t_sccp, c_labels
@@ -881,6 +895,7 @@ def main():
         seed=args.seed,
         embed_mode=args.embed,
         q_grid=q_grid,
+        cluster_mode = 'plain',
     )
     class2cluster = class2cluster_s
     t_sccp = t_sccp_s
