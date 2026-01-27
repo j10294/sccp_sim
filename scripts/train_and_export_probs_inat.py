@@ -68,29 +68,98 @@ class NPZImageDataset(Dataset):
 # ----------------------------
 # Model
 # ----------------------------
-def build_model(name: str, num_classes: int, freeze_backbone: bool = False):
+def build_model(name: str, num_classes: int, finetune: str='full'):
+    """
+    finetune: 'full', 'head', or 'last'
+    - 'full' : full fine-tune
+    - 'head' : train head only (freeze backbone)
+    - 'last' : train head + last stage/block (partial fine-tune)
+    """
+
     name = name.lower()
+    finetune = finetune.lower()
+    assert finetune in ['full','head','last']
 
-    if name == "mobilenet_v3_small":
-        m = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
-        m.classifier[-1] = nn.Linear(m.classifier[-1].in_features, num_classes)
-        if freeze_backbone:
-            for p in m.features.parameters():
-                p.requires_grad = False
-        return m
+    def set_requires_grad(module, flag: bool):
+        for p in module.parameters():
+            p.requires_grad = flag
 
-    if name == "resnet18":
+    if name == 'resnet18':
         m = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         m.fc = nn.Linear(m.fc.in_features, num_classes)
-        if freeze_backbone:
-            for p in m.parameters():
-                p.requires_grad = False
-            for p in m.fc.parameters():
-                p.requires_grad = True
+
+        if finetune == 'head':
+            set_requires_grad(m, False)
+            set_requires_grad(m.fc, True)
+        elif finetune == 'last':
+            set_requires_grad(m.conv1, False)
+            set_requires_grad(m.bn1, False)
+            set_requires_grad(m.layer4, True)
+            set_requires_grad(m.fc, True)
         return m
+    
+    if name == 'resnet50':
+        m = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        m.fc = nn.Linear(m.fc.in_features, num_classes)
 
-    raise ValueError(f"Unknown model: {name}. Use mobilenet_v3_small or resnet18")
+        if finetune == 'head':
+            set_requires_grad(m, False)
+            set_requires_grad(m.fc, True)
+        elif finetune == 'last':
+            set_requires_grad(m.conv1, False)
+            set_requires_grad(m.bn1, False)
+            set_requires_grad(m.layer4, True)
+            set_requires_grad(m.fc, True)
+        return m
+    
+    if name == 'mobilenet_v3_small':
+        m = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
+        m.classifier[-1] = nn.Linear(m.classifier[-1].in_features, num_classes)
 
+
+        if finetune == 'head':
+            set_requires_grad(m, False)
+            set_requires_grad(m.classifier, True)
+        elif finetune == 'last':
+            set_requires_grad(m, False)
+            # heuristic : unfreeze last 2 inverted residual blocks
+            if hasattr(m, 'features') and len(m.features) >= 2:
+                set_requires_grad(m.features[-2], True)
+            set_requires_grad(m.classifier, True)
+        return m
+    
+    if name == "efficientnet_b0":
+        m = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+        m.classifier[-1] = nn.Linear(m.classifier[-1].in_features, num_classes)
+
+        if finetune == 'head':
+            set_requires_grad(m, False)
+            set_requires_grad(m.classifier, True)
+        elif finetune == 'last':
+            set_requires_grad(m, False)
+            # heuristic : unfreeze last stage
+            if hasattr(m, 'features') and len(m.features) >= 2:
+                set_requires_grad(m.features[-2], True)
+            set_requires_grad(m.classifier, True)
+        return m
+    
+
+    if name == 'convnext_tiny':
+        m = models.convnext_tiny(weights=models.ConvNeXt_Tiny_Weights.DEFAULT)
+        m.classifier[-1] = nn.Linear(m.classifier[-1].in_features, num_classes)
+
+        if finetune == 'head':
+            set_requires_grad(m, False)
+            set_requires_grad(m.classifier, True)
+        elif finetune == 'last':
+            set_requires_grad(m, False)
+            # convnext has 'features' (sequential of stages)
+            if hasattr(m, 'features') and len(m.features) >= 1:
+                set_requires_grad(m.features[-1], True) #last stage
+            set_requires_grad(m.classifier, True)
+        return m
+    
+    raise ValueError(f"Unknown model name: {name}")
 
 # ----------------------------
 # Train / Eval / Predict
@@ -165,10 +234,16 @@ def main():
     ap.add_argument("--img_npz", type=str, required=True)
     ap.add_argument("--out_prob_npz", type=str, required=True)
 
-    ap.add_argument("--model", type=str, default="mobilenet_v3_small",
-                    choices=["mobilenet_v3_small", "resnet18"])
+    ap.add_argument("--model", type=str, default="resnet50",
+                    choices=["mobilenet_v3_small", "resnet18", "resnet50", "efficientnet_b0", "convnext_tiny"])
+    ap.add_argument("--finetune", type=str, default="head", choices=["full", "head", "last"],
+                    help="full: all params, head: classifier only, last: last stage + head")
+    ap.add_argument("--lr_head", type=float, default=1e-3)
+    ap.add_argument("--lr_backbone", type=float, default=1e-4)
+
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--batch_size", type=int, default=128)
+
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--weight_decay", type=float, default=1e-4)
     ap.add_argument("--num_workers", type=int, default=4)
@@ -236,13 +311,24 @@ def main():
     dl_train = DataLoader(ds_train, batch_size=args.batch_size, shuffle=True, **dl_common)
     dl_valB  = DataLoader(ds_valB,  batch_size=args.batch_size, shuffle=False, **dl_common)
 
-    model = build_model(args.model, num_classes=K, freeze_backbone=args.freeze_backbone).to(device)
+    model = build_model(args.model, num_classes=K, finetune=args.finetune).to(device)
 
-    opt = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-    )
+    head_params, backbone_params = [], []
+    for n, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if ('fc' in n) or ('classifier' in n):
+            head_params.append(p)
+        else:
+            backbone_params.append(p)
+    
+    param_groups = []
+    if backbone_params:
+        param_groups.append({'params': backbone_params, 'lr': args.lr_backbone})
+    if head_params:
+        param_groups.append({'params': head_params, 'lr': args.lr_head})
+
+    opt = torch.optim.AdamW(param_groups, weight_decay=args.weight_decay)
     scaler = torch.cuda.amp.GradScaler(enabled=amp)
 
     print(f"[device] {device}  [amp] {amp}")
@@ -310,12 +396,20 @@ def main():
         "val_idxT": idxT.tolist(),
     }
 
+    # class counts in training pool
+    counts_pool = np.bincount(y_train.astype(int), minlength=K).astype(np.int64)
+    tail_frac = 0.2 #수정 가능. 일단 0.2로 맞춰둠
+    m = int(np.ceil(tail_frac * K))
+    tail_set = np.argsort(counts_pool)[:m].astype(np.int64)
+
     os.makedirs(os.path.dirname(out_prob_npz), exist_ok=True)
     np.savez_compressed(
         out_prob_npz,
         p_sel=p_sel.astype(np.float32), y_sel=y_sel.astype(np.int64),
         p_cal=p_cal.astype(np.float32), y_cal=y_cal.astype(np.int64),
         p_test=p_test.astype(np.float32), y_test=y_test2.astype(np.int64),
+        counts_pool=counts_pool,
+        tail_set = tail_set,
         meta=np.array([meta], dtype=object),
     )
 

@@ -12,6 +12,13 @@ import torchvision
 import torchvision.transforms as T
 from torch.utils.data import DataLoader, Subset
 
+from torchvision.models import (
+    ResNet18_Weights, ResNet34_Weights, ResNet50_Weights,
+    ResNet101_Weights, ResNet152_Weights,
+    ResNeXt50_32X4D_Weights, ResNeXt101_32X8D_Weights
+)
+
+
 
 # -------------------------
 # Reproducibility utilities
@@ -121,27 +128,38 @@ def tail_set_from_counts(cls_counts: np.ndarray, tail_frac: float) -> np.ndarray
 # --------------------------------
 # Model 
 # -------------------------------
-def build_model(arch: str, num_classes: int = 100):
+def build_model(arch: str, num_classes: int = 100, pretrained: bool = True):
+    # 1) Load ImageNet-pretrained weights (for the body)
     if arch == "resnet18":
-        m = torchvision.models.resnet18(weights=None)
+        w = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+        m = torchvision.models.resnet18(weights=w)
     elif arch == "resnet34":
-        m = torchvision.models.resnet34(weights=None)
+        w = ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
+        m = torchvision.models.resnet34(weights=w)
     elif arch == "resnet50":
-        m = torchvision.models.resnet50(weights=None)
+        w = ResNet50_Weights.IMAGENET1K_V1 if pretrained else None
+        m = torchvision.models.resnet50(weights=w)
     elif arch == "resnet101":
-        m = torchvision.models.resnet101(weights=None)
+        w = ResNet101_Weights.IMAGENET1K_V1 if pretrained else None
+        m = torchvision.models.resnet101(weights=w)
     elif arch == "resnet152":
-        m = torchvision.models.resnet152(weights=None)
+        w = ResNet152_Weights.IMAGENET1K_V1 if pretrained else None
+        m = torchvision.models.resnet152(weights=w)
     elif arch == "resnext50_32x4d":
-        m = torchvision.models.resnext50_32x4d(weights=None)
+        w = ResNeXt50_32X4D_Weights.IMAGENET1K_V1 if pretrained else None
+        m = torchvision.models.resnext50_32x4d(weights=w)
     elif arch == "resnext101_32x8d":
-        m = torchvision.models.resnext101_32x8d(weights=None)
+        w = ResNeXt101_32X8D_Weights.IMAGENET1K_V1 if pretrained else None
+        m = torchvision.models.resnext101_32x8d(weights=w)
     else:
         raise ValueError(arch)
 
-    # CIFAR adaptation
+    # 2) CIFAR stem (keeps 32x32 resolution)
+    #    NOTE: conv1/maxpool are now randomly initialized due to replacement.
     m.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
     m.maxpool = nn.Identity()
+
+    # 3) Replace classifier head for CIFAR-100
     m.fc = nn.Linear(m.fc.in_features, num_classes)
     return m
 
@@ -363,6 +381,8 @@ def main():
         T.Normalize(mean, std),
     ])
 
+
+
     # Load datasets
     train_base_aug = torchvision.datasets.CIFAR100(
         root=args.data_root, train=True, download=True, transform=train_tf
@@ -470,7 +490,7 @@ def main():
     # 6) Model (training seed separately)
     set_seed(args.seed_train, deterministic=args.deterministic)
 
-    model = build_model(args.arch, num_classes=K)
+    model = build_model(args.arch, num_classes=K, pretrained=True)
     model = model.to(device)
 
     criterion = nn.CrossEntropyLoss()
@@ -551,6 +571,8 @@ def main():
         tag += "_LTtest"
 
     tag += f"_tailfrac{args.tail_frac}"
+    tag += f"_cal{int(round(args.calib_frac * 100)):02d}"
+    tag += f"_sd{args.seed_data}_st{args.seed_train}"
 
 
 

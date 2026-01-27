@@ -657,13 +657,12 @@ def sccp_thresholds(
         if m.any():
             t_class[k] = quantile_upper(scores_cal[m], alpha)
 
-    
     # ------------------------------------------------------------
-    # cluster thresholds (use effective cluster count!)
+    # cluster thresholds (compute ONCE, using effective cluster count)
     # ------------------------------------------------------------
     C = int(C_eff) if ("C_eff" in locals() and C_eff is not None) else int(n_clusters)
 
-    t_cluster = np.full(C, np.nan, dtype=np.float64)
+    t_cluster_arr = np.full(C, np.nan, dtype=np.float64)  # cluster-wise thresholds
     n_cluster = np.zeros(C, dtype=np.int64)
 
     for c in range(C):
@@ -671,50 +670,47 @@ def sccp_thresholds(
         m = np.isin(y_cal, cls_in_c)
         n_cluster[c] = int(m.sum())
         if m.any():
-            t_cluster[c] = quantile_upper(scores_cal[m], alpha)
+            t_cluster_arr[c] = quantile_upper(scores_cal[m], alpha)
         else:
-            t_cluster[c] = global_t
+            t_cluster_arr[c] = global_t  # safe fallback
 
     # ------------------------------------------------------------
-    # global + cluster shrinkage (per cluster)
+    # global + cluster shrinkage (per cluster)  -> t_mix_cluster
     # ------------------------------------------------------------
     t_mix_cluster = np.zeros(C, dtype=np.float64)
     for c in range(C):
-        tc = t_cluster[c] if np.isfinite(t_cluster[c]) else global_t
+        tc = t_cluster_arr[c] if np.isfinite(t_cluster_arr[c]) else global_t
         nc = n_cluster[c]
         wc = nc / (nc + shrink_tau) if (nc + shrink_tau) > 0 else 0.0
         t_mix_cluster[c] = wc * tc + (1.0 - wc) * global_t
-    
-    null_id = C - 1
-    t_mix_cluster[null_id] = global_t # null cluster always uses global threshold
 
+    # If using cccp_null, enforce null cluster uses global threshold
+    if cluster_mode == "cccp_null":
+        null_id = C - 1
+        t_mix_cluster[null_id] = global_t
 
     # ------------------------------------------------------------
-    # per-class SCCP threshold
+    # per-class SCCP threshold (class shrinkage toward global, centered at cluster-mixed target)
     # ------------------------------------------------------------
+    counts_cal = np.bincount(y_cal, minlength=K).astype(int)
     t_sccp = np.zeros(K, dtype=np.float64)
-    for k in range(K):
-        ck = int(c_labels[k])
-        if ck < 0 or ck >= C:
-            raise ValueError(f"class {k}: cluster id {ck} out of range [0, {C-1}]")
-        t_cluster = np.full(C, np.nan, dtype=np.float64)
-        for c in range(C):
-            cls_in_c = np.where(c_labels == c)[0]
-            m = np.isin(y_cal, cls_in_c)
-            if m.any():
-                t_cluster[c] = quantile_upper(scores_cal[m], alpha)
-            else:
-                t_cluster[c] = global_t
 
-        counts_cal = np.bincount(y_cal, minlength=K)
-        t_sccp = np.zeros(K, dtype=np.float64)
-        for y  in range(K):
-            ny = int(counts_cal[y])
-            tau_y = shrink_tau / (shrink_tau + ny) if (shrink_tau + ny) > 0 else 1.0
-            t_sccp[y] = (1.0 - tau_y) * t_cluster[c_labels[y]] + tau_y * global_t
-    # ------------------------------------------------------------
+    for y in range(K):
+        ny = int(counts_cal[y])
+        tau_y = shrink_tau / (shrink_tau + ny) if (shrink_tau + ny) > 0 else 1.0
+        cy = int(c_labels[y])
+        if cy < 0 or cy >= C:
+            raise ValueError(f"class {y}: cluster id {cy} out of range [0, {C-1}]")
+        # target = cluster-mixed threshold; then shrink class toward global depending on ny
+        t_sccp[y] = (1.0 - tau_y) * t_mix_cluster[cy] + tau_y * global_t
 
-    return t_class, t_cluster, global_t, t_mix_cluster, t_sccp, c_labels
+    # (reporting) per-class CCCP thresholds computed earlier: t_class
+
+    return t_class, t_cluster_arr, global_t, t_mix_cluster, t_sccp, c_labels
+
+    
+
+
 
 # -------------------------
 # SCCP-only evaluator for sweep

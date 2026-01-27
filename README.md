@@ -70,20 +70,37 @@ data/npz/
 ## 3. 모델 학습 및 확률 NPZ 생성
 앞서 변환한 이미지 NPZ 파일을 input으로 하고, 확률 NPZ 를 output으로 하는 모델을 학습한다. 이 단계의 목적은 각 이미지에 대한 class probability를 얻는 것이며, 모델의 분류 정확도 자체는 Conformal prediction 방법 특성상 크게 중요하지 않다. 그러나 정확도가 너무 낮은 모델의 경우에는 class probability가 거의 동일하여 자칫 prediction set size를 너무 크게 만들 수 있으므로, 정확도가 너무 낮은 모델을 사용하는 것에는 주의가 필요하다. 
 
-### 실행 예시 (MobileNetV3-Small)
+## 전이학습 (Transfer learning) 설정
+본 실험에서는 torchvision의 DEFAULT weights를 사용한다. 또한 fine-tuning의 범위를 조절하기 위해 `--finetune` 옵션을 제공한다.
+- `--finetune full` : 전체 파라미터 fine-tune
+- `--finetune head` : 분류 head만 학습 (backbone freeze, linear probe)
+- `--finetune last` : 마지막 stage + head만 학습 (partial fine-tune)
+
+
+### 실행 예시 1 (ResNet50, head-only)
 ```bash
-python scripts/train_and_export_probs_inat.py \
+python3 scripts/train_and_export_probs_inat.py \
   --img_npz data/npz/inat2017_images_t50k_v10k_te10k_seed1.npz \
-  --out_prob_npz data/npz/inat2017_probs_selA_calB_test_mnv3s_fz_t50k_ep5_seed1.npz \
-  --model mobilenet_v3_small \
+  --out_prob_npz data/npz/inat2017_probs_selA_calB_test_rn50_head_t50k_ep5_seed1.npz \
+  --model resnet50 \
+  --finetune head \
   --epochs 5 \
   --batch_size 128 \
   --lr 1e-3 \
   --weight_decay 1e-4 \
   --calibA_frac 0.5 \
   --calib_split_seed 1 \
-  --seed 1
+  --seed 1 \
+  --amp
 ```
+
+#### 지원 모델
+`--model` 에서 다음 backbone을 선택할 수 있다.
+- `resnet18`
+- `resnet50`
+- `mobilenet_v3_small`
+- `efficientnet_b0`
+- `convnext_tiny`
 
 ### 출력 파일
 ```bash

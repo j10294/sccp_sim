@@ -23,15 +23,16 @@
 # Running experiments
 ## 1. Model Training & Generating NPZ (CIFAR-100-LT)
 ```bash
-python train_cifar100_lt.py \
+python3 train_cifar100_lt.py \
   --data_root ./data \
   --out_dir ./out/cifar100LT_probs \
   --use_gpu \
   --lt --imb_type exp --imb_factor 100 \
   --split_mode fracs \
   --train_frac 0.6 --select_frac 0.2 --calib_frac 0.2 \
-  --epochs 100 --batch_size 128 --lr 0.01 \
-  --seed_data 1 --seed_train 1
+  --epochs 30 --batch_size 128 --lr 0.01 \
+  --seed_data 1 --seed_train 1 \
+  --tail_mode override --tail_frac 0.1 #어느정도를 tail로 정의내릴 것인지 설정
   --arch resnet152 #["resnet18", "resnet34", "resnet50", "resnet101", "resnet152", "resnext50_32x4d", "resnext101_32x8d"]
 ```
 - 생성되는 npz에는 보통 `p_sel, y_sel, p_cal, y_cal, p_tst, y_tst` 및 tail 관련 정보가 포함됨
