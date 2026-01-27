@@ -70,14 +70,7 @@ data/npz/
 ## 3. 모델 학습 및 확률 NPZ 생성
 앞서 변환한 이미지 NPZ 파일을 input으로 하고, 확률 NPZ 를 output으로 하는 모델을 학습한다. 이 단계의 목적은 각 이미지에 대한 class probability를 얻는 것이며, 모델의 분류 정확도 자체는 Conformal prediction 방법 특성상 크게 중요하지 않다. 그러나 정확도가 너무 낮은 모델의 경우에는 class probability가 거의 동일하여 자칫 prediction set size를 너무 크게 만들 수 있으므로, 정확도가 너무 낮은 모델을 사용하는 것에는 주의가 필요하다. 
 
-## 전이학습 (Transfer learning) 설정
-본 실험에서는 torchvision의 DEFAULT weights를 사용한다. 또한 fine-tuning의 범위를 조절하기 위해 `--finetune` 옵션을 제공한다.
-- `--finetune full` : 전체 파라미터 fine-tune
-- `--finetune head` : 분류 head만 학습 (backbone freeze, linear probe)
-- `--finetune last` : 마지막 stage + head만 학습 (partial fine-tune)
-
-
-### 실행 예시 1 (ResNet50, head-only)
+### 실행 예시 (ResNet50, head-only)
 ```bash
 python3 scripts/train_and_export_probs_inat.py \
   --img_npz data/npz/inat2017_images_t50k_v10k_te10k_seed1.npz \
@@ -88,24 +81,46 @@ python3 scripts/train_and_export_probs_inat.py \
   --batch_size 128 \
   --lr 1e-3 \
   --weight_decay 1e-4 \
-  --calibA_frac 0.5 \
   --calib_split_seed 1 \
   --seed 1 \
   --amp
 ```
 
-#### 지원 모델
-`--model` 에서 다음 backbone을 선택할 수 있다.
-- `resnet18`
-- `resnet50`
-- `mobilenet_v3_small`
-- `efficientnet_b0`
-- `convnext_tiny`
+
+### 옵션 설명
+#### 입/출력 관련
+- `--img_npz` : iNat2017 원본 이미지를 전처리하여 저장한 이미지 NPZ 파일 경로.
+- `--out_prob_npz` : 학습된 모델로부터 얻은 class probability 결과를 저장할 NPZ 파일 경로. 생성되는 파일에는 다음 항목들이 포함된다. 
+  -  `p_sel, y_sel` : selection set 확률 및 레이블
+  -  `p_cal, y_cal` : calibration set 확률 및 레이블
+  - `p_test, y_test` : test set 확률 및 레이블
+  - `counts_pool` : train split 기준 클래스별 샘플 수 (tail 정의용)
+
+#### 모델 및 전이학습 설정
+- `--model`  : resnet18, resnet50, 
+- `--finetune` : `head`는 classification head만 학습, backbone은 고정.`last` 는 마지막 stage+head만 학습,`full`은 전체 네트워크를 fine-tuning.
+
+#### 학습 하이퍼파라미터
+- `--epochs` : 학습 에폭 수
+- `--batch_size` : 미니배치 크기. GPU에 맞게 조절 가능.
+- `--lr` : 학습률
+- `--weight_decay` : L2 정규화 계수. overfitting 방지 위해 사용.
+
+##### Calibration Split
+- `--calibA_frac` : validation set을 Calib-A / Calib-B / Test2로 나눌 때, Calib-A가 차지하는 비율.
+  - Calib-A: selection set (clustering / embedding용)
+  - Calib-B: calibration set (threshold 추정용)
+- `--calib_split_seed` : validation set 분할에 사용되는 random seed.
+동일 seed 사용 시 실험 재현 가능.
+
+##### 재현성 및 연산 옵션
+- `--seed` : 모델 초기화 및 데이터 로딩에 사용되는 random seed.
+- `--amp` : Automatic Mixed Precision (FP16) 사용. GPU 메모리 사용량을 줄이고 학습 속도를 향상시킨다. (모델 출력 확률에는 영향을 주지 않음)
 
 ### 출력 파일
 ```bash
 data/npz/
-└── inat2017_probs_selA_calB_test_mnv3s_fz_t50k_ep5_seed1.npz
+└── inat2017_probs_selA_calB_test_rn50_head_t50k_ep5_seed1.npz
 ```
 이 확률 NPZ 파일은 이후의 Conformal Prediction 방법들의 input으로 사용된다. 
 
@@ -140,8 +155,8 @@ data/npz/
 
 ### 실행 예시
 ```bash
-python run_cp_from_npz.py \
-  --npz data/npz/inat2017_probs_selA_calB_test_mnv3s_fz_t50k_ep5_seed1.npz \
+python3 scripts/un_cp_from_npz.py \
+  --npz data/npz/inat2017_probs_selA_calB_test_rn50_head_t50k_ep5_seed1.npz \
   --alpha 0.1 \
   --K 5089 \
   --clusters 10 \
