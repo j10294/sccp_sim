@@ -76,14 +76,13 @@ python3 scripts/train_and_export_probs_inat.py \
   --img_npz data/npz/inat2017_images_strat_t50k_v30k_te10k_seed1.npz \
   --out_prob_npz data/npz/inat2017_probs_strat_selA_calB_test_rn50_head_t50k_ep10_seed1.npz \
   --model resnet50 \
-  --finetune head\
+  --finetune head \
   --epochs 10 \
   --batch_size 128 \
   --lr 1e-3 \
   --weight_decay 1e-4 \
   --calib_split_seed 1 \
-  --seed 1 \
-  --amp
+  --seed 1
 ```
 
 
@@ -157,11 +156,11 @@ data/npz/
 ### 실행 예시
 ```bash
 python3 scripts/run_cp_from_npz.py \
-  --npz data/npz/inat2017_probs_strat_selA_calB_test_rn50_head_t50k_ep10_seed1.npz \
+  --npz data/npz/inat2017_probs_strat_selA_calB_test_rn50_head_t50k_ep20_seed1.npz \
   --alpha 0.1 \
   --K 5089 \
   --clusters 10 \
-  --tau 100 \
+  --tau 30 \
   --embed score_quantile \
   --q_grid 0.5,0.6,0.7,0.8,0.9 \
   --seed 1
@@ -176,6 +175,13 @@ python3 scripts/run_cp_from_npz.py \
   - `prob_mean` : 평균 확률 벡터 기반 임베딩 
 - `q_grid` : `score_quantile` 에서 사용하는 quantile grid
 
+
+### (Note) Running iNat2017 training safely 
+서버에 CUDA/cuDNN이 여러 버전 설치되어 있어 fine-tuning에서 오류가 발생하는 경우, 다음 스크립트를 통해 실행
+```bash
+chmod +x run_inat_full.sh
+./run_inat_full.sh
+```
 
 ---
 

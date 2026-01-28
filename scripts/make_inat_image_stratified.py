@@ -181,7 +181,7 @@ def stratified_split_indices(labels, n_train, n_calib, n_test, seed=1,
     )
     # Impose min_test where feasible
     if min_test_per_class > 0:
-        for k in np.where(feasible_tc)[0]:
+        for k in np.where(feasible_tc)[0]:ㅇ
             if test_counts[k] < min_test_per_class:
                 # steal from a class with surplus test allocation
                 need = min_test_per_class - int(test_counts[k])
